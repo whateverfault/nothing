@@ -54,7 +54,38 @@
         (da)->capacity = (new_size);   \
     } while (0)
 
+#define da_append(da, item)                    \
+    do {                                       \
+        da_reserve(da, (da)->count+1);         \
+        (da)->items[(da)->count++] = (item);   \
+    } while (0)
+
+#define da_remove_unordered(da, i)                   \
+    do {                                             \
+        size_t j = (i);                              \
+        (da)->items[j] = (da)->items[--(da)->count]; \
+    } while (0)
+
+#define da_remove(da, i)                             \
+    do {                                             \
+        size_t j_ = (i);                             \
+        NOTHING_ASSERT(j_ >= 0 && j_ < (da)->count); \
+        for (; j_ < (da)->count - 1; ++j_){          \
+            (da)->items[j_] = (da)->items[j_+1];     \
+        }                                            \
+        --(da)->count;                               \
+    } while (0)
+
 #define da_free(da) NOTHING_FREE((da).items)
+
+typedef struct tnode TNode;
+
+typedef struct tnode {
+    TNode* parent;
+    TNode* left;
+    TNode* right;
+    void* data;
+} TNode;
 
 typedef struct{
     size_t count;
@@ -79,6 +110,8 @@ typedef struct{
     size_t count;
 } HashMap;
 
+TNode* create_node(void* data, TNode* parent);
+
 int read_entire_file(String_Builder* sb, const char* path);
 void sv_trim(String_View* sv);
 void sv_trim_left(String_View* sv);
@@ -99,7 +132,17 @@ unsigned long hash_key(const unsigned char* key);
 
 #ifdef NOTHING_IMPLEMENTATION
 
+#include <stdio.h>
 #include <ctype.h>
+
+TNode* create_node(void* data, TNode* parent) {
+    TNode* node = (TNode*)NOTHING_MALLOC(sizeof(TNode));
+    node->data = data;
+    node->parent = parent;
+    node->left = NULL;
+    node->right = NULL;
+    return node;
+}
 
 int sb_to_sv(String_Builder* sb, String_View* sv, size_t start, size_t count){
     if (start+count >= sb->count+1) return 0;
@@ -139,7 +182,7 @@ char* sv_to_cstr(String_View* sv){
 
 int sb_get_line(String_Builder* sb, String_View* sv, size_t line){
     size_t start = 0;
-    size_t count = 0;
+    sv->count = 0;
 
     while (line > 0){
         if (start >= sb->count) return 0;
@@ -149,11 +192,11 @@ int sb_get_line(String_Builder* sb, String_View* sv, size_t line){
     }
 
     sv->items = sb->items+start;
-    while (sv->items[count] != '\n'){
-        if (start+count >= sb->count) return 0;
-        ++count;
+    while (sv->items[sv->count] != '\n'){
+        if (start+sv->count >= sb->count) return 0;
+        ++sv->count;
     }
-    sv->count = count;
+    
     return 1;
 }
 
