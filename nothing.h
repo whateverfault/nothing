@@ -104,7 +104,7 @@ typedef struct{
     struct KeyValue* next;
 } KeyValue;
 
-typedef struct{
+typedef struct HashMap {
     KeyValue** buckets;
     size_t capacity;
     size_t count;
@@ -125,7 +125,7 @@ HashMap* hm_alloc();
 void hm_reset(HashMap* hm);
 void hm_free(HashMap* hm);
 int hm_put(HashMap* hm, char* key, void* value);
-void* hm_get(HashMap* hm, char* key);
+void* hm_get(HashMap* hm, const char* key);
 unsigned long hash_key(const unsigned char* key);
 
 #endif //NOTHING_H
@@ -351,7 +351,7 @@ int hm_put(HashMap* hm, char* key, void* value){
     return 0;
 }
 
-void* hm_get(HashMap* hm, char* key){
+void* hm_get(HashMap* hm, const char* key) {
     unsigned long hash = hash_key((void*)key);
 
     size_t index = hash % hm->capacity;
