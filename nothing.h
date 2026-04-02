@@ -283,6 +283,37 @@ HashMap* hm_alloc(){
     return hm;
 }
 
+HashMap* hm_copy(HashMap *hm) {
+    HashMap *copy = hm_alloc();
+    if (copy == NULL) {
+        return copy;
+    }
+
+    copy->capacity = hm->capacity;
+    copy->count = hm->count;
+    
+    copy->buckets = NOTHING_CALLOC(hm->capacity, sizeof(KeyValue*));
+
+    KeyValue* cur = NULL;
+    for (size_t i = 0; i < hm->capacity; ++i){
+        KeyValue* source = hm->buckets[i];
+        KeyValue** dest = &copy->buckets[i];
+        if (source == NULL) continue;
+
+        cur = source;
+        while (cur != NULL) {
+            *dest = NOTHING_MALLOC(sizeof(KeyValue));
+            (*dest)->key = strdup(source->key);
+            (*dest)->value = source->value;
+            (*dest)->next = source->next;
+            
+            cur = (KeyValue*)cur->next;
+        }
+    }
+    
+    return copy;
+}
+
 void hm_free_buckets(HashMap* hm){
     KeyValue* cur = NULL;
     KeyValue* tmp = NULL;
@@ -294,7 +325,7 @@ void hm_free_buckets(HashMap* hm){
         cur = bucket;
         while (cur != NULL) {
             tmp = cur;
-            cur = (KeyValue*)bucket->next;
+            cur = (KeyValue*)cur->next;
             
             free(tmp->key);
             free(tmp);
@@ -332,7 +363,7 @@ int hm_put(HashMap* hm, char* key, void* value){
         cur = (KeyValue*)cur->next;
     }
     
-    KeyValue* new = malloc(sizeof(KeyValue));
+    KeyValue* new = NOTHING_MALLOC(sizeof(KeyValue));
     if (new == NULL){
         return 1;
     }
