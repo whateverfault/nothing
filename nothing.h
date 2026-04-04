@@ -78,8 +78,11 @@
 
 #define da_free(da) NOTHING_FREE((da).items)
 
-typedef struct tnode TNode;
+#define sb_print(sb) printf("%*s", (int)sb.count, sb.items)
 
+typedef void (*free_func_t)(void *ptr);
+
+typedef struct tnode TNode;
 typedef struct tnode {
     TNode* parent;
     TNode* left;
@@ -112,11 +115,13 @@ typedef struct HashMap {
 
 TNode* create_node(void* data, TNode* parent);
 
-int read_entire_file(String_Builder* sb, const char* path);
+char* sv_to_cstr(String_View* sv);
 void sv_trim(String_View* sv);
 void sv_trim_left(String_View* sv);
 void sv_trim_right(String_View* sv);
 
+char* sb_to_cstr(String_Builder* sb);
+int read_entire_file(String_Builder* sb, const char* path);
 int sb_get_line(String_Builder* sb, String_View* sv, size_t line);
 int sb_appendf(String_Builder* sb, const char* fmt, ...);
 void sb_appendc(String_Builder* sb, char c);
@@ -177,6 +182,16 @@ char* sv_to_cstr(String_View* sv){
     }
     
     cstr[sv->count] = 0;
+    return cstr;
+}
+
+char* sb_to_cstr(String_Builder* sb){
+    char* cstr = NOTHING_MALLOC(sizeof(char)*(sb->count+1));
+    for (size_t i = 0; i < sb->count; ++i){
+        cstr[i] = sb->items[i];
+    }
+    
+    cstr[sb->count] = 0;
     return cstr;
 }
 
@@ -344,7 +359,9 @@ void hm_free(HashMap* hm){
 }
 
 int hm_put(HashMap* hm, char* key, void* value){
-    if (key == NULL) return 1;
+    if (key == NULL) {
+        return 1;
+    }
     
     unsigned long hash = hash_key((void*)key);
     
