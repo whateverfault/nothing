@@ -78,7 +78,7 @@
 
 #define da_free(da) NOTHING_FREE((da).items)
 
-#define sb_print(sb) printf("%*s", (int)sb.count, sb.items)
+#define sb_print(sb) printf("%.*s", (int)sb.count, sb.items)
 
 typedef void (*free_func_t)(void *ptr);
 
@@ -115,23 +115,35 @@ typedef struct HashMap {
 
 TNode* create_node(void* data, TNode* parent);
 
-char* sv_to_cstr(String_View* sv);
+char* sv_to_cstr(String_View sv);
+String_Builder sv_to_sb(String_View sv);
+String_Builder sv_to_escaped_sb(String_View sv);
 void sv_trim(String_View* sv);
 void sv_trim_left(String_View* sv);
 void sv_trim_right(String_View* sv);
 
-char* sb_to_cstr(String_Builder* sb);
+char* sb_to_cstr(String_Builder sb);
+String_View sb_to_sv(String_Builder sb);
+bool sv_cmp_cstr(String_View sv, char *cstr);
+bool sv_cmp_sb(String_View sv, String_Builder sb);
+bool sv_cmp(String_View sv_1, String_View sv_2);
+String_Builder cstr_to_sb(char *cstr);
+String_Builder sb_cpy(String_Builder sb);
 int read_entire_file(String_Builder* sb, const char* path);
 int sb_get_line(String_Builder* sb, String_View* sv, size_t line);
 int sb_appendf(String_Builder* sb, const char* fmt, ...);
+int sb_append_sv(String_Builder* sb, String_View *sv);
 void sb_appendc(String_Builder* sb, char c);
 
 HashMap* hm_alloc();
 void hm_reset(HashMap* hm);
 void hm_free(HashMap* hm);
 int hm_put(HashMap* hm, char* key, void* value);
+int hm_nput(HashMap* hm, char* key, size_t key_len, void* value);
 void* hm_get(HashMap* hm, const char* key);
+void* hm_nget(HashMap* hm, const char* key, size_t key_len);
 unsigned long hash_key(const unsigned char* key);
+unsigned long hash_nkey(const unsigned char* key, size_t key_len);
 
 #endif //NOTHING_H
 
@@ -149,12 +161,11 @@ TNode* create_node(void* data, TNode* parent) {
     return node;
 }
 
-int sb_to_sv(String_Builder* sb, String_View* sv, size_t start, size_t count){
-    if (start+count >= sb->count+1) return 0;
-    
-    sv->count = count;
-    sv->items = sb->items+start;
-    return 1;
+String_View sb_to_sv(String_Builder sb){
+    return (String_View){
+        .items = sb.items,
+        .count = sb.count,
+    };
 }
 
 void sv_trim(String_View* sv){
@@ -175,24 +186,134 @@ void sv_trim_right(String_View* sv){
     }
 }
 
-char* sv_to_cstr(String_View* sv){
-    char* cstr = NOTHING_MALLOC(sizeof(char)*(sv->count+1));
-    for (size_t i = 0; i < sv->count; ++i){
-        cstr[i] = sv->items[i];
+char* sv_to_cstr(String_View sv){
+    char* cstr = NOTHING_MALLOC(sizeof(char)*(sv.count+1));
+    for (size_t i = 0; i < sv.count; ++i){
+        cstr[i] = sv.items[i];
     }
     
-    cstr[sv->count] = 0;
+    cstr[sv.count] = 0;
     return cstr;
 }
 
-char* sb_to_cstr(String_Builder* sb){
-    char* cstr = NOTHING_MALLOC(sizeof(char)*(sb->count+1));
-    for (size_t i = 0; i < sb->count; ++i){
-        cstr[i] = sb->items[i];
+String_Builder sv_to_sb(String_View sv){
+    char* s = NOTHING_MALLOC(sizeof(char)*(sv.count));
+    for (size_t i = 0; i < sv.count; ++i){
+        s[i] = sv.items[i];
     }
     
-    cstr[sb->count] = 0;
+    return (String_Builder){
+        .items = s,
+        .count = sv.count,
+        .capacity = sv.count,
+    };
+}
+
+String_Builder sv_to_escaped_sb(String_View sv) {
+    String_Builder sb = {0};
+    
+    for (size_t i = 0; i < sv.count; ++i) {
+        if (sv.items[i] == '\\' && i + 1 < sv.count) {
+            ++i;
+            
+            switch (sv.items[i]) {
+                case 'n': {
+                    sb_appendc(&sb, '\n');
+                    continue;
+                } break;
+                    
+                case 'r': {
+                    sb_appendc(&sb, '\r');
+                    continue;
+                } break;
+                    
+                case 't': {
+                    sb_appendc(&sb, '\t');
+                    continue;
+                } break;
+                    
+                case 'b': {
+                    sb_appendc(&sb, '\b');
+                    continue;
+                } break;
+                    
+                case 'a': {
+                    sb_appendc(&sb, '\a');
+                    continue;
+                } break;
+                    
+                case '\'': {
+                    sb_appendc(&sb, '\'');
+                    continue;
+                } break;
+                    
+                case '\"': {
+                    sb_appendc(&sb, '\"');
+                    continue;
+                } break;
+                    
+                case '0': {
+                    sb_appendc(&sb, '\0');
+                    continue;
+                } break;
+            }
+        }
+        
+        sb_appendc(&sb, sv.items[i]);
+    }
+
+    return sb;
+}
+
+bool sv_cmp_cstr(String_View sv, char *cstr) {
+    size_t cstr_len = strlen(cstr);
+    return cstr_len == sv.count && strncmp(sv.items, cstr, sv.count) == 0;
+}
+
+bool sv_cmp_sb(String_View sv, String_Builder sb) {
+    return sv.count == sb.count && strncmp(sv.items, sb.items, sv.count) == 0;
+}
+
+bool sv_cmp(String_View sv_1, String_View sv_2) {
+    return sv_1.count == sv_2.count && strncmp(sv_1.items, sv_2.items, sv_1.count) == 0;
+}
+
+char* sb_to_cstr(String_Builder sb){
+    char* cstr = NOTHING_MALLOC(sizeof(char)*(sb.count+1));
+    for (size_t i = 0; i < sb.count; ++i){
+        cstr[i] = sb.items[i];
+    }
+    
+    cstr[sb.count] = 0;
     return cstr;
+}
+
+String_Builder cstr_to_sb(char *cstr){
+    size_t len = strlen(cstr);
+    char* s = NOTHING_MALLOC(sizeof(char)*len);
+    for (size_t i = 0; i < len; ++i){
+        s[i] = cstr[i];
+    }
+    
+    String_Builder sb = {
+        .items = s,
+        .count = len,
+        .capacity = len,
+    };
+    return sb;
+}
+
+String_Builder sb_cpy(String_Builder sb) {
+    char* s = NOTHING_MALLOC(sizeof(char)*sb.count);
+    for (size_t i = 0; i < sb.count; ++i){
+        s[i] = sb.items[i];
+    }
+    
+    return (String_Builder){
+        .items = s,
+        .count = sb.count,
+        .capacity = sb.count,
+    };
 }
 
 int sb_get_line(String_Builder* sb, String_View* sv, size_t line){
@@ -230,6 +351,21 @@ int sb_appendf(String_Builder* sb, const char* fmt, ...){
 
     sb->count += n;
     return n;
+}
+
+int sb_append_sv(String_Builder* sb, String_View *sv){
+    if (sv->count == 0) {
+        return 0;
+    }
+    
+    da_reserve(sb, sb->count + sv->count);
+    size_t start = sb->count;
+    
+    for (size_t i = 0; i < sv->count; ++i) {
+        sb->items[sb->count++] = sv->items[i];
+    }
+    
+    return sb->count - start;
 }
 
 void sb_appendc(String_Builder* sb, char c){
@@ -399,6 +535,55 @@ int hm_put(HashMap* hm, char* key, void* value){
     return 0;
 }
 
+char *__strndup(const char *s, size_t n) {
+    char *result = (char *)malloc(n + 1);
+    if (!result) return NULL;
+    strncpy(result, s, n);
+    result[n] = '\0';
+    return result;
+}
+
+int hm_nput(HashMap* hm, char* key, size_t key_len, void* value){
+    if (key == NULL) {
+        return 1;
+    }
+    
+    unsigned long hash = hash_nkey((void*)key, key_len);
+    
+    size_t index = hash % hm->capacity;
+    
+    KeyValue* cur = hm->buckets[index];
+    KeyValue* prev = NULL;
+    
+    while (cur != NULL){
+        if (strncmp(cur->key, key, key_len) == 0){
+            cur->value = value;
+            return 0;
+        }
+        
+        prev = cur;
+        cur = (KeyValue*)cur->next;
+    }
+    
+    KeyValue* new = NOTHING_MALLOC(sizeof(KeyValue));
+    if (new == NULL){
+        return 1;
+    }
+    
+    new->key = __strndup(key, key_len);
+    new->value = value;
+    new->next = NULL;
+    
+    if (prev == NULL){
+        hm->buckets[index] = new;
+    } else{
+        prev->next = (struct KeyValue *)new;
+    }
+    
+    ++hm->count; 
+    return 0;
+}
+
 void* hm_get(HashMap* hm, const char* key) {
     unsigned long hash = hash_key((void*)key);
 
@@ -413,11 +598,35 @@ void* hm_get(HashMap* hm, const char* key) {
     return NULL;
 }
 
+void* hm_nget(HashMap* hm, const char* key, size_t key_len) {
+    unsigned long hash = hash_nkey((void*)key, key_len);
+
+    size_t index = hash % hm->capacity;
+    KeyValue* cur = hm->buckets[index];
+    
+    while (cur != NULL){
+        if (strncmp(cur->key, key, key_len) == 0) return cur->value;
+        cur = (KeyValue*)cur->next;
+    }
+    
+    return NULL;
+}
+
 unsigned long hash_key(const unsigned char* key) {
     unsigned long hash = 5381;
     int c;
     while ((c = *key++)) {
-        hash = ((hash << 5) + hash) + c; // hash * 33 + c
+        hash = ((hash << 5) + hash) + c;
+    }
+    return hash;
+}
+
+unsigned long hash_nkey(const unsigned char* key, size_t key_len) {
+    unsigned long hash = 5381;
+    size_t pos = 0;
+    while (pos < key_len) {
+        hash = ((hash << 5) + hash) + key[pos];
+        ++pos;
     }
     return hash;
 }
