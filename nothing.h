@@ -77,8 +77,10 @@
     } while (0)
 
 #define da_free(da) NOTHING_FREE((da).items)
+#define da_pfree(da) NOTHING_FREE((da)->items)
 
-#define sb_print(sb) printf("%.*s", (int)sb.count, sb.items)
+#define sb_print(sb) printf("%.*s", (int)(sb).count, (sb).items)
+#define sb_pprint(sb) printf("%.*s", (int)(sb)->count, (sb)->items)
 
 typedef void (*free_func_t)(void *ptr);
 
@@ -116,26 +118,30 @@ typedef struct HashMap {
 TNode* create_node(void* data, TNode* parent);
 
 char* sv_to_cstr(String_View sv);
-String_Builder sv_to_sb(String_View sv);
-String_Builder sv_to_escaped_sb(String_View sv);
+void sv_to_sb(String_Builder *sb, String_View *sv);
+void sv_to_escaped_sb(String_Builder *sb, String_View *sv);
 void sv_trim(String_View* sv);
 void sv_trim_left(String_View* sv);
 void sv_trim_right(String_View* sv);
 
-char* sb_to_cstr(String_Builder sb);
-String_View sb_to_sv(String_Builder sb);
-bool sv_cmp_cstr(String_View sv, char *cstr);
-bool sv_cmp_sb(String_View sv, String_Builder sb);
-bool sv_cmp(String_View sv_1, String_View sv_2);
+char* sb_to_cstr(String_Builder *sb);
+void sb_to_sv(String_View *sv, String_Builder *sb);
+bool sv_cmp_cstr(String_View *sv, char *cstr);
+bool sv_cmp_sb(String_View *sv, String_Builder *sb);
+bool sv_cmp(String_View *sv_1, String_View *sv_2);
 String_Builder cstr_to_sb(char *cstr);
+String_Builder *sb_alloc(void);
+String_Builder *sb_new(char *s);
 String_Builder sb_cpy(String_Builder sb);
 int read_entire_file(String_Builder* sb, const char* path);
 int sb_get_line(String_Builder* sb, String_View* sv, size_t line);
 int sb_appendf(String_Builder* sb, const char* fmt, ...);
+int sb_append_sb(String_Builder* sb_1, String_Builder *sb_2);
 int sb_append_sv(String_Builder* sb, String_View *sv);
 void sb_appendc(String_Builder* sb, char c);
+void sb_insertc(String_Builder* sb, char c, size_t pos);
 
-HashMap* hm_alloc();
+HashMap* hm_alloc(void);
 void hm_reset(HashMap* hm);
 void hm_free(HashMap* hm);
 int hm_put(HashMap* hm, char* key, void* value);
@@ -161,11 +167,9 @@ TNode* create_node(void* data, TNode* parent) {
     return node;
 }
 
-String_View sb_to_sv(String_Builder sb){
-    return (String_View){
-        .items = sb.items,
-        .count = sb.count,
-    };
+void sb_to_sv(String_View *sv, String_Builder *sb){
+    sv->items = sb->items;
+    sv->count = sb->count;
 }
 
 void sv_trim(String_View* sv){
@@ -196,95 +200,89 @@ char* sv_to_cstr(String_View sv){
     return cstr;
 }
 
-String_Builder sv_to_sb(String_View sv){
-    char* s = NOTHING_MALLOC(sizeof(char)*(sv.count));
-    for (size_t i = 0; i < sv.count; ++i){
-        s[i] = sv.items[i];
+void sv_to_sb(String_Builder *sb, String_View *sv){
+    char* s = NOTHING_MALLOC(sizeof(char)*(sv->count));
+    for (size_t i = 0; i < sv->count; ++i){
+        s[i] = sv->items[i];
     }
-    
-    return (String_Builder){
-        .items = s,
-        .count = sv.count,
-        .capacity = sv.count,
-    };
+
+    sb->items = s;
+    sb->count = sv->count;
+    sb->count = sv->count;
 }
 
-String_Builder sv_to_escaped_sb(String_View sv) {
-    String_Builder sb = {0};
-    
-    for (size_t i = 0; i < sv.count; ++i) {
-        if (sv.items[i] == '\\' && i + 1 < sv.count) {
+void sv_to_escaped_sb(String_Builder *sb, String_View *sv) {
+    for (size_t i = 0; i < sv->count; ++i) {
+        if (sv->items[i] == '\\' && i + 1 < sv->count) {
             ++i;
             
-            switch (sv.items[i]) {
+            switch (sv->items[i]) {
                 case 'n': {
-                    sb_appendc(&sb, '\n');
+                    sb_appendc(sb, '\n');
                     continue;
                 } break;
                     
                 case 'r': {
-                    sb_appendc(&sb, '\r');
+                    sb_appendc(sb, '\r');
                     continue;
                 } break;
                     
                 case 't': {
-                    sb_appendc(&sb, '\t');
+                    sb_appendc(sb, '\t');
                     continue;
                 } break;
                     
                 case 'b': {
-                    sb_appendc(&sb, '\b');
+                    sb_appendc(sb, '\b');
                     continue;
                 } break;
                     
                 case 'a': {
-                    sb_appendc(&sb, '\a');
+                    sb_appendc(sb, '\a');
                     continue;
                 } break;
                     
                 case '\'': {
-                    sb_appendc(&sb, '\'');
+                    sb_appendc(sb, '\'');
                     continue;
                 } break;
                     
                 case '\"': {
-                    sb_appendc(&sb, '\"');
+                    sb_appendc(sb, '\"');
                     continue;
                 } break;
                     
                 case '0': {
-                    sb_appendc(&sb, '\0');
+                    sb_appendc(sb, '\0');
                     continue;
                 } break;
             }
         }
         
-        sb_appendc(&sb, sv.items[i]);
+        sb_appendc(sb, sv->items[i]);
     }
-
-    return sb;
 }
 
-bool sv_cmp_cstr(String_View sv, char *cstr) {
+bool sv_cmp_cstr(String_View *sv, char *cstr) {
     size_t cstr_len = strlen(cstr);
-    return cstr_len == sv.count && strncmp(sv.items, cstr, sv.count) == 0;
+    return cstr_len == sv->count && strncmp(sv->items, cstr, sv->count) == 0;
 }
 
-bool sv_cmp_sb(String_View sv, String_Builder sb) {
-    return sv.count == sb.count && strncmp(sv.items, sb.items, sv.count) == 0;
+bool sv_cmp_sb(String_View *sv, String_Builder *sb) {
+    return sv->count == sb->count && strncmp(sv->items, sb->items, sv->count) == 0;
 }
 
-bool sv_cmp(String_View sv_1, String_View sv_2) {
-    return sv_1.count == sv_2.count && strncmp(sv_1.items, sv_2.items, sv_1.count) == 0;
+bool sv_cmp(String_View *sv_1, String_View *sv_2) {
+    return sv_1->count == sv_2->count && strncmp(sv_1->items, sv_2->items, sv_1->count) == 0;
 }
 
-char* sb_to_cstr(String_Builder sb){
-    char* cstr = NOTHING_MALLOC(sizeof(char)*(sb.count+1));
-    for (size_t i = 0; i < sb.count; ++i){
-        cstr[i] = sb.items[i];
+char* sb_to_cstr(String_Builder *sb){
+    char* cstr = NOTHING_MALLOC(sizeof(char)*(sb->count+1));
+    for (size_t i = 0; i < sb->count; ++i){
+        cstr[i] = sb->items[i];
     }
     
-    cstr[sb.count] = 0;
+    cstr[sb->count] = 0;
     return cstr;
 }
 
@@ -300,6 +298,25 @@ String_Builder cstr_to_sb(char *cstr){
         .count = len,
         .capacity = len,
     };
+    return sb;
+}
+
+String_Builder *sb_alloc(void) {
+    String_Builder *sb = (String_Builder*)NOTHING_MALLOC(sizeof(String_Builder));
+    *sb = (String_Builder){0};
+    return sb;
+}
+
+String_Builder *sb_new(char *s) {
+    size_t len = strlen(s);
+    
+    String_Builder *sb = (String_Builder*)NOTHING_MALLOC(sizeof(String_Builder));
+    *sb = (String_Builder){
+        .items = s,
+        .count = len,
+        .capacity = len,
+    };
+    
     return sb;
 }
 
@@ -353,6 +370,21 @@ int sb_appendf(String_Builder* sb, const char* fmt, ...){
     return n;
 }
 
+int sb_append_sb(String_Builder* sb_1, String_Builder *sb_2){
+    if (sb_2->count == 0) {
+        return 0;
+    }
+    
+    da_reserve(sb_1, sb_1->count + sb_2->count);
+    size_t start = sb_1->count;
+    
+    for (size_t i = 0; i < sb_2->count; ++i) {
+        sb_1->items[sb_1->count++] = sb_2->items[i];
+    }
+    
+    return sb_1->count - start;
+}
+
 int sb_append_sv(String_Builder* sb, String_View *sv){
     if (sv->count == 0) {
         return 0;
@@ -375,6 +407,22 @@ void sb_appendc(String_Builder* sb, char c){
     }
     
     sb->items[sb->count++] = c;
+}
+
+void sb_insertc(String_Builder* sb, char c, size_t pos){
+    NOTHING_ASSERT(pos <= sb->count);
+    
+    if (sb->count+1 >= sb->capacity){
+        size_t expected = sb->capacity == 0? NOTHING_DA_INIT_CAP : sb->capacity;
+        da_resize(sb, expected*2);
+    }
+
+    for (size_t i = pos; i < sb->count - 1; ++i) {
+        sb->items[i + 1] = sb->items[i];
+    }
+    
+    sb->items[pos] = c;
+    ++sb->count;
 }
 
 int read_entire_file(String_Builder* sb, const char* path){
@@ -417,7 +465,7 @@ int read_entire_file(String_Builder* sb, const char* path){
     return 1;
 }
 
-HashMap* hm_alloc(){
+HashMap* hm_alloc(void){
     HashMap* hm = NOTHING_MALLOC(sizeof(HashMap));
     if (hm == NULL){
         return NULL;
