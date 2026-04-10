@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <string.h>
+#include <stdio.h>
 #include <stdarg.h>
 
 #define NOTHING_DA_INIT_CAP 1024
@@ -60,10 +61,17 @@
         (da)->items[(da)->count++] = (item);   \
     } while (0)
 
+#define da_append_many(da_dest, da_source)                  \
+    do {                                                    \
+        for (size_t i_ = 0; i_ < (da_source)->count; ++i_){ \
+            da_append((da_dest), (da_source)->items[i_]);   \
+        }                                                   \
+    } while (0)
+
 #define da_remove_unordered(da, i)                   \
     do {                                             \
-        size_t j = (i);                              \
-        (da)->items[j] = (da)->items[--(da)->count]; \
+        size_t j_ = (i);                              \
+        (da)->items[j_] = (da)->items[--(da)->count]; \
     } while (0)
 
 #define da_remove(da, i)                             \
@@ -117,15 +125,20 @@ typedef struct HashMap {
 
 TNode* create_node(void* data, TNode* parent);
 
+char* sb_to_cstr(String_Builder *sb);
 char* sv_to_cstr(String_View sv);
-void sv_to_sb(String_Builder *sb, String_View *sv);
+void sv_to_sb(String_View *sv, String_Builder *sb);
 void sv_to_escaped_sb(String_Builder *sb, String_View *sv);
+void sv_from_sb(String_View *sv, String_Builder *sb);
+
 void sv_trim(String_View* sv);
 void sv_trim_left(String_View* sv);
 void sv_trim_right(String_View* sv);
 
-char* sb_to_cstr(String_Builder *sb);
-void sb_to_sv(String_View *sv, String_Builder *sb);
+String_Builder sb_trim(String_Builder* sb);
+String_Builder sb_trim_left(String_Builder* sb);
+String_Builder sb_trim_right(String_Builder* sb);
+
 bool sv_cmp_cstr(String_View *sv, char *cstr);
 bool sv_cmp_sb(String_View *sv, String_Builder *sb);
 bool sv_cmp(String_View *sv_1, String_View *sv_2);
@@ -134,7 +147,8 @@ String_Builder *sb_alloc(void);
 String_Builder *sb_new(char *s);
 String_Builder sb_cpy(String_Builder sb);
 int read_entire_file(String_Builder* sb, const char* path);
-int sb_get_line(String_Builder* sb, String_View* sv, size_t line);
+int get_line_from_sb(String_Builder* sb, String_View* sv, size_t line);
+bool sb_getline(String_Builder* sb, FILE *stream);
 int sb_appendf(String_Builder* sb, const char* fmt, ...);
 int sb_append_sb(String_Builder* sb_1, String_Builder *sb_2);
 int sb_append_sv(String_Builder* sb, String_View *sv);
@@ -142,6 +156,7 @@ void sb_appendc(String_Builder* sb, char c);
 void sb_insertc(String_Builder* sb, char c, size_t pos);
 
 HashMap* hm_alloc(void);
+HashMap* hm_copy(HashMap *hm);
 void hm_reset(HashMap* hm);
 void hm_free(HashMap* hm);
 int hm_put(HashMap* hm, char* key, void* value);
@@ -167,7 +182,7 @@ TNode* create_node(void* data, TNode* parent) {
     return node;
 }
 
-void sb_to_sv(String_View *sv, String_Builder *sb){
+void sv_from_sb(String_View *sv, String_Builder *sb){
     sv->items = sb->items;
     sv->count = sb->count;
 }
@@ -178,16 +193,46 @@ void sv_trim(String_View* sv){
 }
 
 void sv_trim_left(String_View* sv){
-    while (sv->count > 0 && iswblank(sv->items[0])){
+    while (sv->count > 0 && isspace(sv->items[0])){
         sv->items = ++sv->items;
         --sv->count;
     }
 }
 
 void sv_trim_right(String_View* sv){
-    while (sv->count > 0 && iswblank(sv->items[sv->count - 1])){
+    while (sv->count > 0 && isspace(sv->items[sv->count - 1])){
         --sv->count;
     }
+}
+
+String_Builder sb_trim(String_Builder* sb){
+    String_View sv = {0};
+    sv_from_sb(&sv, sb);
+    sv_trim(&sv);
+
+    String_Builder trimmed = {0};
+    sv_to_sb(&sv, &trimmed);
+    return trimmed;
+}
+
+String_Builder sb_trim_left(String_Builder* sb){
+    String_View sv = {0};
+    sv_from_sb(&sv, sb);
+    sv_trim_left(&sv);
+
+    String_Builder trimmed = {0};
+    sv_to_sb(&sv, &trimmed);
+    return trimmed;
+}
+
+String_Builder sb_trim_right(String_Builder* sb){
+    String_View sv = {0};
+    sv_from_sb(&sv, sb);
+    sv_trim_right(&sv);
+
+    String_Builder trimmed = {0};
+    sv_to_sb(&sv, &trimmed);
+    return trimmed;
 }
 
 char* sv_to_cstr(String_View sv){
@@ -200,7 +245,7 @@ char* sv_to_cstr(String_View sv){
     return cstr;
 }
 
-void sv_to_sb(String_Builder *sb, String_View *sv){
+void sv_to_sb(String_View *sv, String_Builder *sb){
     char* s = NOTHING_MALLOC(sizeof(char)*(sv->count));
     for (size_t i = 0; i < sv->count; ++i){
         s[i] = sv->items[i];
@@ -208,7 +253,7 @@ void sv_to_sb(String_Builder *sb, String_View *sv){
 
     sb->items = s;
     sb->count = sv->count;
-    sb->count = sv->count;
+    sb->capacity = sv->count;
 }
 
 void sv_to_escaped_sb(String_Builder *sb, String_View *sv) {
@@ -333,7 +378,7 @@ String_Builder sb_cpy(String_Builder sb) {
     };
 }
 
-int sb_get_line(String_Builder* sb, String_View* sv, size_t line){
+int get_line_from_sb(String_Builder* sb, String_View* sv, size_t line){
     size_t start = 0;
     sv->count = 0;
 
@@ -351,6 +396,23 @@ int sb_get_line(String_Builder* sb, String_View* sv, size_t line){
     }
     
     return 1;
+}
+
+bool sb_getline(String_Builder* sb, FILE *stream){
+    if (stream == NULL) {
+        return false;
+    }
+    
+    int c;
+    while ((c = fgetc(stream)) != EOF) {
+        if (c == '\n') {
+            break;
+        }
+        
+        sb_appendc(sb, c);
+    }
+
+    return true;
 }
 
 int sb_appendf(String_Builder* sb, const char* fmt, ...){
