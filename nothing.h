@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdint.h>
 
 #define NOTHING_DA_INIT_CAP 1024
 
@@ -31,7 +32,6 @@
 #ifndef NOTHING_ASSERT
 #include <assert.h>
 #include <stdbool.h>
-
 #define NOTHING_ASSERT assert
 #endif
 
@@ -155,6 +155,15 @@ int sb_append_sv(String_Builder* sb, String_View *sv);
 void sb_appendc(String_Builder* sb, char c);
 void sb_insertc(String_Builder* sb, char c, size_t pos);
 
+
+int is_all_digits_16(const char *p);
+uint64_t parse_u64_fast(const char *p, size_t len);
+uint64_t parse_u64_8(const char *p);
+size_t scan_digits_simd(const char *p, size_t len);
+
+bool parse_int_sv(String_View sv, int *out);
+bool parse_float_sv(String_View sv, double *out);
+
 HashMap* hm_alloc(void);
 HashMap* hm_copy(HashMap *hm);
 void hm_reset(HashMap* hm);
@@ -172,6 +181,8 @@ unsigned long hash_nkey(const unsigned char* key, size_t key_len);
 
 #include <stdio.h>
 #include <ctype.h>
+#include <math.h>
+#include <emmintrin.h>
 
 TNode* create_node(void* data, TNode* parent) {
     TNode* node = (TNode*)NOTHING_MALLOC(sizeof(TNode));
@@ -485,6 +496,194 @@ void sb_insertc(String_Builder* sb, char c, size_t pos){
     
     sb->items[pos] = c;
     ++sb->count;
+}
+
+int is_all_digits_16(const char *p) {
+    __m128i v = _mm_loadu_si128((const __m128i*)p);
+
+    __m128i zero = _mm_set1_epi8('0');
+    __m128i nine = _mm_set1_epi8('9');
+
+    __m128i lt0 = _mm_cmplt_epi8(v, zero);
+    __m128i gt9 = _mm_cmpgt_epi8(v, nine);
+
+    __m128i bad = _mm_or_si128(lt0, gt9);
+
+    return _mm_movemask_epi8(bad) == 0;
+}
+
+uint64_t parse_u64_fast(const char *p, size_t len) {
+    uint64_t val = 0;
+
+    for (size_t i = 0; i < len; i++) {
+        val = val * 10 + (uint64_t)(p[i] - '0');
+    }
+
+    return val;
+}
+
+uint64_t parse_u64_8(const char *p) {
+    return
+        (uint64_t)(p[0]-'0') * 10000000ULL +
+        (uint64_t)(p[1]-'0') * 1000000ULL +
+        (uint64_t)(p[2]-'0') * 100000ULL +
+        (uint64_t)(p[3]-'0') * 10000ULL +
+        (uint64_t)(p[4]-'0') * 1000ULL +
+        (uint64_t)(p[5]-'0') * 100ULL +
+        (uint64_t)(p[6]-'0') * 10ULL +
+        (uint64_t)(p[7]-'0');
+}
+
+size_t scan_digits_simd(const char *p, size_t len) {
+    size_t i = 0;
+
+    while (i + 16 <= len) {
+        if (!is_all_digits_16(p + i)) break;
+        i += 16;
+    }
+
+    while (i < len && p[i] >= '0' && p[i] <= '9') {
+        i++;
+    }
+
+    return i;
+}
+
+bool parse_int_sv(String_View sv, int *out) {
+    const char *p = sv.items;
+    size_t len = sv.count;
+
+    if (len == 0) return false;
+
+    int sign = 1;
+    if (*p == '-' || *p == '+') {
+        if (*p == '-') sign = -1;
+        p++;
+        len--;
+    }
+
+    if (len == 0) return false;
+    
+    size_t digits = scan_digits_simd(p, len);
+
+    if (digits != len) return false;
+    if (digits > 18) return false;
+
+    uint64_t val = parse_u64_fast(p, digits);
+
+    *out = (long long)(sign * (long long)val);
+    return true;
+}
+
+static const double pow10_inv[] = {
+    1e0, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7,
+    1e-8, 1e-9, 1e-10, 1e-11, 1e-12, 1e-13, 1e-14, 1e-15
+};
+
+bool parse_float_sv(String_View sv, double *out) {
+    const char *p = sv.items;
+    const char *end = p + sv.count;
+
+    if (p == end) return false;
+    
+    int sign = 1;
+    if (*p == '+' || *p == '-') {
+        if (*p == '-') sign = -1;
+        ++p;
+        if (p == end) return false;
+    }
+    
+    uint64_t mant = 0;
+    int extra_exp = 0;
+    int mant_digits = 0;
+    int frac_digits = 0;
+    bool seen_dot = false;
+    bool has_digits = false;
+
+    while (p < end) {
+        char c = *p;
+
+        if (c >= '0' && c <= '9') {
+            has_digits = true;
+
+            if (mant_digits < 19) {
+                mant = mant * 10 + (c - '0');
+                ++mant_digits;
+                if (seen_dot) ++frac_digits;
+            } else {
+                if (!seen_dot) ++extra_exp;
+            }
+            ++p;
+        }
+        else if (c == '.') {
+            if (seen_dot) return false;
+            seen_dot = true;
+            ++p;
+        }
+        else {
+            break;
+        }
+    }
+
+    if (!has_digits) return false;
+    
+    int exp10 = extra_exp - frac_digits;
+
+    if (p < end && (*p == 'e' || *p == 'E')) {
+        ++p;
+        if (p == end) return false;
+
+        int exp_sign = 1;
+        if (*p == '+' || *p == '-') {
+            if (*p == '-') exp_sign = -1;
+            ++p;
+            if (p == end) return false;
+        }
+
+        int exp_val = 0;
+        bool has_exp_digits = false;
+
+        while (p < end && *p >= '0' && *p <= '9') {
+            has_exp_digits = true;
+
+            if (exp_val < 10000) {
+                exp_val = exp_val * 10 + (*p - '0');
+            }
+            p++;
+        }
+
+        if (!has_exp_digits) return false;
+
+        exp10 += exp_sign * exp_val;
+    }
+
+    
+    if (p != end) return false;
+    double result = (double)mant;
+    
+    if (exp10 >= 0 && exp10 <= 15) {
+        uint64_t scaled = mant;
+    
+        for (int i = 0; i < exp10; i++) {
+            if (scaled > UINT64_MAX / 10) {
+                result = (double)mant * pow(10.0, exp10);
+                goto done;
+            }
+            scaled *= 10;
+        }
+
+        result = (double)scaled;
+    }
+    else if (exp10 >= -15 && exp10 < 0) {
+        result = (double)mant * pow10_inv[-exp10];
+    }
+    else {
+        result = (double)mant * pow(10.0, exp10);
+    }
+
+    done:
+    *out = sign * result;
+    return true;
 }
 
 int read_entire_file(String_Builder* sb, const char* path){
