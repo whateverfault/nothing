@@ -90,6 +90,12 @@
 #define sb_print(sb) printf("%.*s", (int)(sb).count, (sb).items)
 #define sb_pprint(sb) printf("%.*s", (int)(sb)->count, (sb)->items)
 
+#define CSTR_TO_SB(cstr) (String_Builder){       \
+.items=   (cstr),                            \
+.count=   (sizeof(cstr)/sizeof((cstr)[0])-1),\
+.capacity=(sizeof(cstr)/sizeof((cstr)[0])-1) \
+}
+
 typedef void (*free_func_t)(void *ptr);
 
 typedef struct tnode TNode;
@@ -112,7 +118,7 @@ typedef struct{
 } String_Builder;
 
 typedef struct{
-    char* key;
+    size_t hash;
     void* value;
     struct KeyValue* next;
 } KeyValue;
@@ -139,9 +145,11 @@ String_Builder sb_trim(String_Builder* sb);
 String_Builder sb_trim_left(String_Builder* sb);
 String_Builder sb_trim_right(String_Builder* sb);
 
+bool sb_cmp_cstr(String_Builder *sv, char *cstr);
 bool sv_cmp_cstr(String_View *sv, char *cstr);
 bool sv_cmp_sb(String_View *sv, String_Builder *sb);
 bool sv_cmp(String_View *sv_1, String_View *sv_2);
+
 String_Builder cstr_to_sb(char *cstr);
 String_Builder *sb_alloc(void);
 String_Builder *sb_new(char *s);
@@ -154,7 +162,6 @@ int sb_append_sb(String_Builder* sb_1, String_Builder *sb_2);
 int sb_append_sv(String_Builder* sb, String_View *sv);
 void sb_appendc(String_Builder* sb, char c);
 void sb_insertc(String_Builder* sb, char c, size_t pos);
-
 
 int is_all_digits_16(const char *p);
 uint64_t parse_u64_fast(const char *p, size_t len);
@@ -170,10 +177,16 @@ void hm_reset(HashMap* hm);
 void hm_free(HashMap* hm);
 int hm_put(HashMap* hm, char* key, void* value);
 int hm_nput(HashMap* hm, char* key, size_t key_len, void* value);
+int hm_put_sb(HashMap* hm, String_Builder *sb, void* value);
+int hm_put_hashed(HashMap* hm, size_t hash, void* value);
+
+void *hm_get_hashed(HashMap* hm, size_t hash);
 void* hm_get(HashMap* hm, const char* key);
 void* hm_nget(HashMap* hm, const char* key, size_t key_len);
-unsigned long hash_key(const unsigned char* key);
-unsigned long hash_nkey(const unsigned char* key, size_t key_len);
+
+size_t hash_key(unsigned char* key);
+size_t hash_nkey(unsigned char* key, size_t key_len);
+size_t hash_combine(size_t a, size_t b);
 
 #endif //NOTHING_H
 
@@ -317,6 +330,11 @@ void sv_to_escaped_sb(String_Builder *sb, String_View *sv) {
         
         sb_appendc(sb, sv->items[i]);
     }
+}
+
+bool sb_cmp_cstr(String_Builder *sb, char *cstr) {
+    size_t cstr_len = strlen(cstr);
+    return cstr_len == sb->count && strncmp(sb->items, cstr, sb->count) == 0;
 }
 
 bool sv_cmp_cstr(String_View *sv, char *cstr) {
@@ -763,7 +781,7 @@ HashMap* hm_copy(HashMap *hm) {
         cur = source;
         while (cur != NULL) {
             *dest = NOTHING_MALLOC(sizeof(KeyValue));
-            (*dest)->key = strdup(source->key);
+            (*dest)->hash = source->hash;
             (*dest)->value = source->value;
             (*dest)->next = source->next;
             
@@ -787,7 +805,6 @@ void hm_free_buckets(HashMap* hm){
             tmp = cur;
             cur = (KeyValue*)cur->next;
             
-            free(tmp->key);
             free(tmp);
         }
     }
@@ -803,20 +820,14 @@ void hm_free(HashMap* hm){
     free(hm);
 }
 
-int hm_put(HashMap* hm, char* key, void* value){
-    if (key == NULL) {
-        return 1;
-    }
-    
-    unsigned long hash = hash_key((void*)key);
-    
+int hm_put_hashed(HashMap* hm, size_t hash, void* value) {
     size_t index = hash % hm->capacity;
     
     KeyValue* cur = hm->buckets[index];
     KeyValue* prev = NULL;
     
     while (cur != NULL){
-        if (strcmp(cur->key, key) == 0){
+        if (cur->hash == hash){
             cur->value = value;
             return 0;
         }
@@ -830,18 +841,26 @@ int hm_put(HashMap* hm, char* key, void* value){
         return 1;
     }
     
-    new->key = strdup(key);
+    new->hash = hash;
     new->value = value;
     new->next = NULL;
     
     if (prev == NULL){
         hm->buckets[index] = new;
-    } else{
+    } else {
         prev->next = (struct KeyValue *)new;
     }
     
     ++hm->count; 
     return 0;
+}
+
+int hm_put(HashMap* hm, char* key, void* value){
+    if (key == NULL) {
+        return 1;
+    }
+    
+    return hm_put_hashed(hm, hash_key((void*)key), value);
 }
 
 char *__strndup(const char *s, size_t n) {
@@ -857,71 +876,34 @@ int hm_nput(HashMap* hm, char* key, size_t key_len, void* value){
         return 1;
     }
     
-    unsigned long hash = hash_nkey((void*)key, key_len);
-    
+    return hm_put_hashed(hm, hash_nkey((void*)key, key_len), value);
+}
+
+int hm_put_sb(HashMap* hm, String_Builder *sb, void* value) {
+    return hm_nput(hm, sb->items, sb->count, value);
+}
+
+void *hm_get_hashed(HashMap* hm, size_t hash) {
     size_t index = hash % hm->capacity;
-    
     KeyValue* cur = hm->buckets[index];
-    KeyValue* prev = NULL;
     
     while (cur != NULL){
-        if (strncmp(cur->key, key, key_len) == 0){
-            cur->value = value;
-            return 0;
-        }
-        
-        prev = cur;
+        if (cur->hash == hash) return cur->value;
         cur = (KeyValue*)cur->next;
     }
     
-    KeyValue* new = NOTHING_MALLOC(sizeof(KeyValue));
-    if (new == NULL){
-        return 1;
-    }
-    
-    new->key = __strndup(key, key_len);
-    new->value = value;
-    new->next = NULL;
-    
-    if (prev == NULL){
-        hm->buckets[index] = new;
-    } else{
-        prev->next = (struct KeyValue *)new;
-    }
-    
-    ++hm->count; 
-    return 0;
+    return NULL;
 }
 
 void* hm_get(HashMap* hm, const char* key) {
-    unsigned long hash = hash_key((void*)key);
-
-    size_t index = hash % hm->capacity;
-    KeyValue* cur = hm->buckets[index];
-    
-    while (cur != NULL){
-        if (strcmp(cur->key, key) == 0) return cur->value;
-        cur = (KeyValue*)cur->next;
-    }
-    
-    return NULL;
+    return hm_get_hashed(hm, hash_key((void*)key));
 }
 
 void* hm_nget(HashMap* hm, const char* key, size_t key_len) {
-    unsigned long hash = hash_nkey((void*)key, key_len);
-
-    size_t index = hash % hm->capacity;
-    KeyValue* cur = hm->buckets[index];
-    
-    while (cur != NULL){
-        if (strncmp(cur->key, key, key_len) == 0) return cur->value;
-        cur = (KeyValue*)cur->next;
-    }
-    
-    return NULL;
+    return hm_get_hashed(hm, hash_nkey((void*)key, key_len));
 }
 
-unsigned long hash_key(const unsigned char* key) {
+size_t hash_key(unsigned char* key) {
     unsigned long hash = 5381;
     int c;
     while ((c = *key++)) {
@@ -930,7 +912,7 @@ unsigned long hash_key(const unsigned char* key) {
     return hash;
 }
 
-unsigned long hash_nkey(const unsigned char* key, size_t key_len) {
+size_t hash_nkey(unsigned char* key, size_t key_len) {
     unsigned long hash = 5381;
     size_t pos = 0;
     while (pos < key_len) {
@@ -938,6 +920,10 @@ unsigned long hash_nkey(const unsigned char* key, size_t key_len) {
         ++pos;
     }
     return hash;
+}
+
+size_t hash_combine(size_t a, size_t b) {
+    return a ^ (b + 0x9e3779b97f4a7c15ULL + (a << 6) + (a >> 2));
 }
 
 #endif //NOTHING_IMPLEMENTATION
