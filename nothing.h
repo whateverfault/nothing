@@ -186,6 +186,7 @@ void* hm_nget(HashMap* hm, const char* key, size_t key_len);
 
 size_t hash_key(unsigned char* key);
 size_t hash_nkey(unsigned char* key, size_t key_len);
+size_t hash_sb(String_Builder *sb);
 size_t hash_combine(size_t a, size_t b);
 
 #endif //NOTHING_H
@@ -781,11 +782,11 @@ HashMap* hm_copy(HashMap *hm) {
         cur = source;
         while (cur != NULL) {
             *dest = NOTHING_MALLOC(sizeof(KeyValue));
-            (*dest)->hash = source->hash;
-            (*dest)->value = source->value;
-            (*dest)->next = source->next;
-            
-            cur = (KeyValue*)cur->next;
+            (*dest)->hash = cur->hash;
+            (*dest)->value = cur->value;
+            (*dest)->next = NULL;
+            dest = &((*dest)->next);
+            cur = cur->next;
         }
     }
     
@@ -824,6 +825,7 @@ int hm_put_hashed(HashMap* hm, size_t hash, void* value) {
     size_t index = hash % hm->capacity;
     
     KeyValue* cur = hm->buckets[index];
+    
     KeyValue* prev = NULL;
     
     while (cur != NULL){
@@ -851,7 +853,8 @@ int hm_put_hashed(HashMap* hm, size_t hash, void* value) {
         prev->next = (struct KeyValue *)new;
     }
     
-    ++hm->count; 
+    ++hm->count;
+
     return 0;
 }
 
@@ -884,6 +887,10 @@ int hm_put_sb(HashMap* hm, String_Builder *sb, void* value) {
 }
 
 void *hm_get_hashed(HashMap* hm, size_t hash) {
+    if (hm->count == 0) {
+        return NULL;
+    }
+    
     size_t index = hash % hm->capacity;
     KeyValue* cur = hm->buckets[index];
     
@@ -920,6 +927,10 @@ size_t hash_nkey(unsigned char* key, size_t key_len) {
         ++pos;
     }
     return hash;
+}
+
+size_t hash_sb(String_Builder *sb) {
+    return hash_nkey((unsigned char*)sb->items, sb->count);
 }
 
 size_t hash_combine(size_t a, size_t b) {
